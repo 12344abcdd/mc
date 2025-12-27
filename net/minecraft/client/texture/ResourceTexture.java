@@ -1,0 +1,144 @@
+package net.minecraft.client.texture;
+
+import com.mojang.blaze3d.platform.TextureUtil;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.logging.LogUtils;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.minecraft.client.resource.metadata.TextureResourceMetadata;
+import net.minecraft.resource.Resource;
+import net.minecraft.resource.ResourceManager;
+import net.minecraft.util.Identifier;
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+
+@Environment(EnvType.CLIENT)
+public class ResourceTexture extends AbstractTexture {
+   static final Logger LOGGER = LogUtils.getLogger();
+   protected final Identifier location;
+
+   public ResourceTexture(Identifier location) {
+      this.location = location;
+   }
+
+   public void load(ResourceManager manager) throws IOException {
+      TextureData textureData = this.loadTextureData(manager);
+      textureData.checkException();
+      TextureResourceMetadata textureResourceMetadata = textureData.getMetadata();
+      boolean bl;
+      boolean bl2;
+      if (textureResourceMetadata != null) {
+         bl = textureResourceMetadata.shouldBlur();
+         bl2 = textureResourceMetadata.shouldClamp();
+      } else {
+         bl = false;
+         bl2 = false;
+      }
+
+      NativeImage nativeImage = textureData.getImage();
+      if (!RenderSystem.isOnRenderThreadOrInit()) {
+         RenderSystem.recordRenderCall(() -> this.upload(nativeImage, bl, bl2));
+      } else {
+         this.upload(nativeImage, bl, bl2);
+      }
+
+   }
+
+   private void upload(NativeImage image, boolean blur, boolean clamp) {
+      TextureUtil.prepareImage(this.getGlId(), 0, image.getWidth(), image.getHeight());
+      image.upload(0, 0, 0, 0, 0, image.getWidth(), image.getHeight(), blur, clamp, false, true);
+   }
+
+   protected TextureData loadTextureData(ResourceManager resourceManager) {
+      return ResourceTexture.TextureData.load(resourceManager, this.location);
+   }
+
+   @Environment(EnvType.CLIENT)
+   protected static class TextureData implements Closeable {
+      @Nullable
+      private final TextureResourceMetadata metadata;
+      @Nullable
+      private final NativeImage image;
+      @Nullable
+      private final IOException exception;
+
+      public TextureData(IOException exception) {
+         this.exception = exception;
+         this.metadata = null;
+         this.image = null;
+      }
+
+      public TextureData(@Nullable TextureResourceMetadata metadata, NativeImage image) {
+         this.exception = null;
+         this.metadata = metadata;
+         this.image = image;
+      }
+
+      public static TextureData load(ResourceManager resourceManager, Identifier id) {
+         try {
+            Resource resource = resourceManager.getResourceOrThrow(id);
+            InputStream inputStream = resource.getInputStream();
+
+            NativeImage nativeImage;
+            try {
+               nativeImage = NativeImage.read(inputStream);
+            } catch (Throwable var9) {
+               if (inputStream != null) {
+                  try {
+                     inputStream.close();
+                  } catch (Throwable var7) {
+                     var9.addSuppressed(var7);
+                  }
+               }
+
+               throw var9;
+            }
+
+            if (inputStream != null) {
+               inputStream.close();
+            }
+
+            TextureResourceMetadata textureResourceMetadata = null;
+
+            try {
+               textureResourceMetadata = (TextureResourceMetadata)resource.getMetadata().decode(TextureResourceMetadata.READER).orElse((Object)null);
+            } catch (RuntimeException runtimeException) {
+               ResourceTexture.LOGGER.warn("Failed reading metadata of: {}", id, runtimeException);
+            }
+
+            return new TextureData(textureResourceMetadata, nativeImage);
+         } catch (IOException iOException) {
+            return new TextureData(iOException);
+         }
+      }
+
+      @Nullable
+      public TextureResourceMetadata getMetadata() {
+         return this.metadata;
+      }
+
+      public NativeImage getImage() throws IOException {
+         if (this.exception != null) {
+            throw this.exception;
+         } else {
+            return this.image;
+         }
+      }
+
+      public void close() {
+         if (this.image != null) {
+            this.image.close();
+         }
+
+      }
+
+      public void checkException() throws IOException {
+         if (this.exception != null) {
+            throw this.exception;
+         }
+      }
+   }
+}
